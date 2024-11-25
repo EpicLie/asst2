@@ -55,10 +55,33 @@ TaskSystemParallelSpawn::TaskSystemParallelSpawn(int num_threads): ITaskSystem(n
     // Implementations are free to add new class member variables
     // (requiring changes to tasksys.h).
     //
+    // pthread_t threads[num_threads];
+    // int thread_ids[num_threads];
+    this->num_threads = num_threads;
+
 }
 
 TaskSystemParallelSpawn::~TaskSystemParallelSpawn() {}
 
+typedef struct {
+    IRunnable* runnable;
+    int task_id;
+    int num_total_tasks;
+    int num_tasks_on_threads;
+}ThreadData;
+void* wrapper(void* arg)
+{
+    // std::cout << "wrapper" << std::endl;
+    ThreadData* data = static_cast<ThreadData*>(arg);
+    for (int i = data->task_id;i < data->task_id + data->num_tasks_on_threads;i++)
+    {
+        data->runnable->runTask(i, data->num_total_tasks);
+    }
+    delete data;
+    return nullptr;
+}
+
+// 注意区分任务数和线程数 比如任务数默认可以是128,但线程数远小于这值
 void TaskSystemParallelSpawn::run(IRunnable* runnable, int num_total_tasks) {
 
 
@@ -67,9 +90,34 @@ void TaskSystemParallelSpawn::run(IRunnable* runnable, int num_total_tasks) {
     // method in Part A.  The implementation provided below runs all
     // tasks sequentially on the calling thread.
     //
+    // 一开始没问题是因为在这里依然是沿用了串行的代码
+    // for (int i = 0; i < num_total_tasks; i++) {
+    //     runnable->runTask(i, num_total_tasks);
+    // }
+    // std::cout << "Spawn" << " " << num_threads <<"\n"<<"tasks"<<" "<<num_total_tasks<< std::endl;
+    const int NUM_THREADS = std::move(this->num_threads);
+    pthread_t threads[NUM_THREADS];
+    int num_tasks_on_threads;
+    num_tasks_on_threads = num_total_tasks / num_threads;
 
-    for (int i = 0; i < num_total_tasks; i++) {
-        runnable->runTask(i, num_total_tasks);
+    for (int i = 0;i < NUM_THREADS;i++)
+    {
+        // 函数指针没法随便转，但一般的指针都可以转成void*
+        num_tasks_on_threads = (i + 1) * num_tasks_on_threads > num_total_tasks ? num_total_tasks % num_threads : num_tasks_on_threads;
+        ThreadData* data = new ThreadData{ runnable, i*num_tasks_on_threads, num_total_tasks, num_tasks_on_threads};
+        if (pthread_create(&threads[i], nullptr, wrapper, data))
+        {
+            std::cerr << "ERROR in creating thread" << i << std::endl;
+            delete data;
+            return;
+        }
+    }
+    for (int i = 0;i < NUM_THREADS;i++)
+    {
+        if (pthread_join(threads[i], nullptr))
+        {
+            std::cerr << "ERROR in joining thread" << i << std::endl;
+        }
     }
 }
 

@@ -4,6 +4,7 @@
 
 typedef int TaskID;
 
+// 会有各种个样的task实现这个虚基类，比如mandelbrotChunkedTask之类的
 class IRunnable {
     public:
         virtual ~IRunnable();
