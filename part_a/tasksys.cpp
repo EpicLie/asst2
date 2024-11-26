@@ -66,7 +66,6 @@ TaskSystemParallelSpawn::~TaskSystemParallelSpawn() {}
 typedef struct {
     IRunnable* runnable;
     int task_id;
-    int num_total_tasks;
     int num_tasks_on_threads;
 }ThreadData;
 void* wrapper(void* arg)
@@ -75,7 +74,7 @@ void* wrapper(void* arg)
     ThreadData* data = static_cast<ThreadData*>(arg);
     for (int i = data->task_id;i < data->task_id + data->num_tasks_on_threads;i++)
     {
-        data->runnable->runTask(i, data->num_total_tasks);
+        data->runnable->runTask(i, data->num_tasks_on_threads);
     }
     delete data;
     return nullptr;
@@ -103,8 +102,9 @@ void TaskSystemParallelSpawn::run(IRunnable* runnable, int num_total_tasks) {
     for (int i = 0;i < NUM_THREADS;i++)
     {
         // 函数指针没法随便转，但一般的指针都可以转成void*
-        num_tasks_on_threads = (i + 1) * num_tasks_on_threads > num_total_tasks ? num_total_tasks % num_threads : num_tasks_on_threads;
-        ThreadData* data = new ThreadData{ runnable, i*num_tasks_on_threads, num_total_tasks, num_tasks_on_threads};
+        num_tasks_on_threads = (NUM_THREADS * num_tasks_on_threads < num_total_tasks) && (i == NUM_THREADS - 1) ? num_total_tasks - i * num_tasks_on_threads : num_tasks_on_threads;
+        // std::cout <<"threads id:"<<i <<" num_tasks: " << num_tasks_on_threads << std::endl;
+        ThreadData* data = new ThreadData{ runnable, i * num_tasks_on_threads, num_tasks_on_threads };
         if (pthread_create(&threads[i], nullptr, wrapper, data))
         {
             std::cerr << "ERROR in creating thread" << i << std::endl;
@@ -142,13 +142,16 @@ const char* TaskSystemParallelThreadPoolSpinning::name() {
     return "Parallel + Thread Pool + Spin";
 }
 
-TaskSystemParallelThreadPoolSpinning::TaskSystemParallelThreadPoolSpinning(int num_threads): ITaskSystem(num_threads) {
+// spinning 意思是 工作线程设置为常循环，每次都检查时候有任务执行。没有任务时就空转。
+TaskSystemParallelThreadPoolSpinning::TaskSystemParallelThreadPoolSpinning(int num_threads) : ITaskSystem(num_threads) {
     //
     // TODO: CS149 student implementations may decide to perform setup
     // operations (such as thread pool construction) here.
     // Implementations are free to add new class member variables
     // (requiring changes to tasksys.h).
     //
+
+
 }
 
 TaskSystemParallelThreadPoolSpinning::~TaskSystemParallelThreadPoolSpinning() {}
