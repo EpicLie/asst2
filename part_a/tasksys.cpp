@@ -16,7 +16,7 @@ const char* TaskSystemSerial::name() {
     return "Serial";
 }
 
-TaskSystemSerial::TaskSystemSerial(int num_threads): ITaskSystem(num_threads) {
+TaskSystemSerial::TaskSystemSerial(int num_threads) : ITaskSystem(num_threads) {
 }
 
 TaskSystemSerial::~TaskSystemSerial() {}
@@ -28,7 +28,7 @@ void TaskSystemSerial::run(IRunnable* runnable, int num_total_tasks) {
 }
 
 TaskID TaskSystemSerial::runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,
-                                          const std::vector<TaskID>& deps) {
+    const std::vector<TaskID>& deps) {
     // You do not need to implement this method.
     return 0;
 }
@@ -48,7 +48,7 @@ const char* TaskSystemParallelSpawn::name() {
     return "Parallel + Always Spawn";
 }
 
-TaskSystemParallelSpawn::TaskSystemParallelSpawn(int num_threads): ITaskSystem(num_threads) {
+TaskSystemParallelSpawn::TaskSystemParallelSpawn(int num_threads) : ITaskSystem(num_threads) {
     //
     // TODO: CS149 student implementations may decide to perform setup
     // operations (such as thread pool construction) here.
@@ -67,15 +67,20 @@ typedef struct {
     IRunnable* runnable;
     int task_id;
     int num_tasks_on_threads;
+    int num_total_tasks;
 }ThreadData;
 void* wrapper(void* arg)
 {
     // std::cout << "wrapper" << std::endl;
     ThreadData* data = static_cast<ThreadData*>(arg);
+
+    // 这样的逻辑才对啊，又自然通顺又显然。那之前我是咋错的？？？
+    // 噢噢，破案了。因为我之前改bug参照的是math_operations_in_tight_for_loop这个测试的逻辑。
+    // 而根据它代码的逻辑，我runTask的第二个参数传进去的应该是num_tasks_on_threads，这样才能高效。
+    // 好像是，具体也记不清了。
     for (int i = data->task_id;i < data->task_id + data->num_tasks_on_threads;i++)
-    {
-        data->runnable->runTask(i, data->num_tasks_on_threads);
-    }
+        data->runnable->runTask(i, data->num_total_tasks);
+
     delete data;
     return nullptr;
 }
@@ -97,14 +102,20 @@ void TaskSystemParallelSpawn::run(IRunnable* runnable, int num_total_tasks) {
     const int NUM_THREADS = std::move(this->num_threads);
     pthread_t threads[NUM_THREADS];
     int num_tasks_on_threads;
+
     num_tasks_on_threads = num_total_tasks / num_threads;
+    // std::cout <<"numTotal: "<<num_total_tasks<<"numTasks: " <<num_tasks_on_threads << std::endl;
 
     for (int i = 0;i < NUM_THREADS;i++)
     {
+        ThreadData* data = nullptr;
+        int num_tasks_on_threads_ori = num_tasks_on_threads;
         // 函数指针没法随便转，但一般的指针都可以转成void*
         num_tasks_on_threads = (NUM_THREADS * num_tasks_on_threads < num_total_tasks) && (i == NUM_THREADS - 1) ? num_total_tasks - i * num_tasks_on_threads : num_tasks_on_threads;
         // std::cout <<"threads id:"<<i <<" num_tasks: " << num_tasks_on_threads << std::endl;
-        ThreadData* data = new ThreadData{ runnable, i * num_tasks_on_threads, num_tasks_on_threads };
+
+        data = new ThreadData{ runnable, i * num_tasks_on_threads_ori, num_tasks_on_threads, num_total_tasks };
+
         if (pthread_create(&threads[i], nullptr, wrapper, data))
         {
             std::cerr << "ERROR in creating thread" << i << std::endl;
@@ -122,7 +133,7 @@ void TaskSystemParallelSpawn::run(IRunnable* runnable, int num_total_tasks) {
 }
 
 TaskID TaskSystemParallelSpawn::runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,
-                                                 const std::vector<TaskID>& deps) {
+    const std::vector<TaskID>& deps) {
     // You do not need to implement this method.
     return 0;
 }
@@ -152,6 +163,7 @@ TaskSystemParallelThreadPoolSpinning::TaskSystemParallelThreadPoolSpinning(int n
     //
 
 
+
 }
 
 TaskSystemParallelThreadPoolSpinning::~TaskSystemParallelThreadPoolSpinning() {}
@@ -171,7 +183,7 @@ void TaskSystemParallelThreadPoolSpinning::run(IRunnable* runnable, int num_tota
 }
 
 TaskID TaskSystemParallelThreadPoolSpinning::runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,
-                                                              const std::vector<TaskID>& deps) {
+    const std::vector<TaskID>& deps) {
     // You do not need to implement this method.
     return 0;
 }
@@ -191,7 +203,7 @@ const char* TaskSystemParallelThreadPoolSleeping::name() {
     return "Parallel + Thread Pool + Sleep";
 }
 
-TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int num_threads): ITaskSystem(num_threads) {
+TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int num_threads) : ITaskSystem(num_threads) {
     //
     // TODO: CS149 student implementations may decide to perform setup
     // operations (such as thread pool construction) here.
@@ -224,7 +236,7 @@ void TaskSystemParallelThreadPoolSleeping::run(IRunnable* runnable, int num_tota
 }
 
 TaskID TaskSystemParallelThreadPoolSleeping::runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,
-                                                    const std::vector<TaskID>& deps) {
+    const std::vector<TaskID>& deps) {
 
 
     //
