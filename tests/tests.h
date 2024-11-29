@@ -334,6 +334,7 @@ class MandelbrotTask: public IRunnable {
         ~MandelbrotTask() {}
 
         // helper function used by Mandelbrot computations
+        // 其实就是给一个阈值和上限次数嗯算
         inline int mandel(float c_re, float c_im, int count) {
             float z_re = c_re, z_im = c_im;
             int i;
@@ -396,11 +397,13 @@ class MandelbrotTask: public IRunnable {
                 }
             }
         }
-    
+        // tasks数量默认128
         void runTask(int task_id, int num_total_tasks) {
             int rowsPerTask = args_->height / num_total_tasks;
 
             if (interleave_ == 1) {
+                // interleaved的意思是，将总的行数以num_total_tasks作间隔(不整除也没事)，然后每个任务只处理间隔num_totaltasks的部分。
+                // ps: 每次都要想想这玩意到底干什么的
                 mandelbrotSerial_interleaved(args_->x0, args_->y0, args_->x1, args_->y1,
                                              args_->width, args_->height,
                                              task_id, args_->height - task_id,
@@ -583,6 +586,9 @@ TestResults simpleTestAsync(ITaskSystem* t) {
  * The amount of computation per task is controlled using `num_elements` and
  * `base_iters`, because each task gets `num_elements` / `num_tasks` elements
  * and does O(base_iters) work per element.
+ */
+ /*
+    400个bulk，每个64个tasks
  */
 TestResults pingPongTest(ITaskSystem* t, bool equal_work, bool do_async,
                          int num_elements, int base_iters) {
@@ -782,6 +788,8 @@ TestResults recursiveFibonacciAsyncTest(ITaskSystem* t) {
  * the threadpool implementation should perform better than the one that spawns
  * new threads with every bulk task launch.
  */
+ // 计算密集型
+// 简单来说，就是一共顺序执行2000个tasks，每个task都要处理512个数，每个task都通过我的并行框架分成num_tasks个任务来做
 TestResults mathOperationsInTightForLoopTestBase(ITaskSystem* t, int num_tasks,
                                                  bool run_with_dependencies, bool do_async) {
 
@@ -1194,7 +1202,8 @@ TestResults mandelbrotChunkedTestBase(ITaskSystem* t, bool do_async) {
         ma.output[i] = 0;
     }
 
-    MandelbrotTask mandel_task(&ma, true);  // No interleaving
+    MandelbrotTask mandel_task(&ma, true);  // No interleaving  ? 为true难道不是interleaving吗？ 
+
 
     // time task-based implementation
     double start_time = CycleTimer::currentSeconds();
@@ -1216,6 +1225,7 @@ TestResults mandelbrotChunkedTestBase(ITaskSystem* t, bool do_async) {
                                  ma.max_iterations,
                                  golden);
 
+    // 验证阶段
     TestResults result;
     result.passed = true;
     for (int i = 0; i < ma.width * ma.height; i++) {
@@ -1232,6 +1242,7 @@ TestResults mandelbrotChunkedTestBase(ITaskSystem* t, bool do_async) {
     return result;
 }
 
+// 执行的函数会指向这里，然后转到base统一执行，分同步和异步的情况
 TestResults mandelbrotChunkedTest(ITaskSystem* t) {
     return mandelbrotChunkedTestBase(t, false);
 }

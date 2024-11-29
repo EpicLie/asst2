@@ -31,7 +31,8 @@ enum TaskSystemType {
     N_TASKSYS_IMPLS, // This must be in the last position.
 };
 
-ITaskSystem *selectTaskSystemRefImpl(int num_threads, TaskSystemType type) {
+// 选取实现方式
+ITaskSystem* selectTaskSystemRefImpl(int num_threads, TaskSystemType type) {
     assert(type < N_TASKSYS_IMPLS);
 
     if (type == SERIAL) {
@@ -53,7 +54,8 @@ int main(int argc, char** argv)
     int num_threads = DEFAULT_NUM_THREADS;
     int num_timing_iterations = DEFAULT_NUM_TIMING_ITERATIONS;
 
-    TestResults (*test[n_tests])(ITaskSystem*) = {
+    // 函数指针数组  相关函数定义在.h文件中
+    TestResults(*test[n_tests])(ITaskSystem*) = {
         simpleTestSync,
         simpleTestAsync,
         pingPongEqualTest,
@@ -65,7 +67,7 @@ int main(int argc, char** argv)
         mathOperationsInTightForLoopFewerTasksTest,
         mathOperationsInTightForLoopFanInTest,
         mathOperationsInTightForLoopReductionTreeTest,
-        spinBetweenRunCallsTest,
+        spinBetweenRunCallsTest, //
         mandelbrotChunkedTest,
         pingPongEqualAsyncTest,
         pingPongUnequalAsyncTest,
@@ -161,15 +163,26 @@ int main(int argc, char** argv)
         printf("Test name: %s\n", test_names[test_id].c_str());
         printf("============================================================="
                "======================\n");
-
+        // 每一种实现都遍历一遍 包括有顺序/多线程
         for (int i = 0; i < N_TASKSYS_IMPLS; i++) {
             double minT = 1e30;
             for (int j = 0; j < num_timing_iterations; j++) {
 
                 // Create a new task system
-                ITaskSystem *t = selectTaskSystemRefImpl(num_threads, (TaskSystemType) i);
+                // 对于顺序执行，虽然接受参数num_threads，但在构造类的时候什么都不会做，只是返回ITaskSystemSerial的类指针
+                ITaskSystem* t = selectTaskSystemRefImpl(num_threads, (TaskSystemType)i);
+                // printf("%d",SERIAL);  枚举类型是可以直接当成变量使用的。在llvm中的实现其实就是定义了一个变量然后将其赋值而已。默认是从0开始
+                // 对于强制转换： int colorInt = 1;
+                // Color color = (Color)colorInt;
+                // llvm中的实现是：
+                // % colorInt = alloca i32
+                // store i32 1, i32*% colorInt
+                // % colorIntVal = load i32, i32*% colorInt
+                // % color = trunc i32 % colorIntVal to i8
 
                 // Run test
+                // 选取对应的测试函数，并传入参数执行
+                // results包含是否通过和用时信息
                 TestResults result = test[test_id](t);
 
                 // Check that the test result was correct

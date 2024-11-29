@@ -148,13 +148,19 @@ void TaskSystemParallelSpawn::sync() {
  */
 
 // 原来是编译器优化的问题...必须设置volatile
-// 现在的问题是，频繁修改共享变量导致其他线程被严重阻塞，降低了并行性
+// 现在的问题是，频繁修改共享变量task_id等导致其他线程被严重阻塞，降低了并行性 此时用时3000ms左右（super light test)
 
-// 共享变量问题解决，但是速度提升不大
+// 采用固定分配方法，共享变量问题解决，但是速度提升不大 此时用时2000ms左右
 // 因为忙等的原因，导致时间片轮转被白白浪费。引入线程阻塞
 
-// 忙等问题解决，速度提升巨大，但还是不够快。
+// 忙等问题解决，速度提升巨大，但还是不够快。 此时用时100ms左右
 // 猜测是主线程被频繁轮转，浪费了时间。
+
+// 解决了主线程的忙等问题，利用条件变量进行阻塞和唤醒  此时用时40ms左右
+// 时间从原来和spawn差不多到已经和ref相差无几，其实已经算过关
+
+// 从哪里可以再抠出一点性能？
+// 抠不出来了，暂时到此为止。
 
 const char* TaskSystemParallelThreadPoolSpinning::name() {
     return "Parallel + Thread Pool + Spin";
@@ -177,6 +183,8 @@ TaskSystemParallelThreadPoolSpinning::TaskSystemParallelThreadPoolSpinning(int n
         workers.emplace_back(move(worker));
         // cout << "构造第" << i << "个线程" << endl;
         this->complete_thread[i] = 0;// 初始时设定为未完成
+
+        // 下面的做法错误，不能break。num_total_tasks此时为0
         // if (num_total_tasks < this->num_threads)
         // {
         //     cout << "break in construct" << endl;
@@ -191,24 +199,24 @@ TaskSystemParallelThreadPoolSpinning::~TaskSystemParallelThreadPoolSpinning()
 {
     // cout << "开始析构" << endl;
     this->stop_flag = true;
-    // cout << "stop_flag" << endl;
+
     this->init = 1;
-    // cout << "init" << endl;
+
     for (int i = 0;i < num_threads;i++)
     {
         this->complete_thread[i] = 0;
     }
     this->last = 1;
-    // cout << "complete" << endl;
-    this->condition.notify_all();
-    // cout << "notify" << endl;
+
+    this->condition_threads.notify_all();
+
     for (int i = 0;i < this->num_threads;i++)
     {
         this->workers[i].join();
         if (this->tasks_less_threads)
             break;
         // cout << "线程" << i << "已销毁" << endl;
-        // delete this->complete_thread;// 销毁指针
+        // delete this->complete_thread;// 销毁指针 不能，会造成double free
     }
 }
 
@@ -226,14 +234,17 @@ void task(TaskSystemParallelThreadPoolSpinning* cl, int thread_id)
         //     // cout << "线程" << thread_id << "由于无任务可做，正在空转" << endl;
         //     continue;
         // }
+        
         unique_lock<mutex> lk(cl->queue_mutex);
-        cl->condition.wait(lk, [cl, thread_id] {return !(cl->complete_thread[thread_id] || !cl->init);});
+        cl->condition_threads.wait(lk, [cl, thread_id] {return !(cl->complete_thread[thread_id] || !cl->init);});
 
         lk.unlock();
-        cl->condition.notify_all();
+        // cl->condition_main.notify_one();
+
+        // 避免最后一轮被重复执行
         if (cl->last)
             continue;
-        // int task_id = 0;
+        
         int num_tasks_on_threads = 0;
         // {
         //     while (!cl->queue_mutex.try_lock())
@@ -265,10 +276,15 @@ void task(TaskSystemParallelThreadPoolSpinning* cl, int thread_id)
         for (int i = task_id;i < task_id + num_tasks_on_threads;i++)
             cl->runnable->runTask(i, cl->num_total_tasks);
 
+        // 尤其注意：为了避免因为就绪队列中线程的随机性导致的读脏数据的问题，临界区资源一定要加锁
+        // 这里，不同线程之间的complete_thread不竞争，但是它们都和主线程竞争。
+        auto lk1 = unique_lock<mutex>(cl->notify_main);
         cl->complete_thread[thread_id] = 1;
         
-        
-        cl->condition.notify_all();
+        // cl->notify_main.lock();
+        lk1.unlock();
+        cl->condition_main.notify_one();
+
         // cout << "线程" << thread_id << "执行完成" << endl;
 
     }
@@ -291,17 +307,9 @@ void TaskSystemParallelThreadPoolSpinning::run(IRunnable* runnable, int num_tota
     // method in Part A.  The implementation provided below runs all
     // tasks sequentially on the calling thread.
     //
-    // for (int i = 0; i < num_total_tasks; i++) {
-    //     runnable->runTask(i, num_total_tasks);
-    // }
     // {
-    //     this->queue_mutex.lock();
-        // cout << "主线程获得锁" << endl;
-    // this->queue_mutex.lock();
+    // cout << "主线程获得锁" << endl;
     this->lk = unique_lock<mutex>(this->queue_mutex);
-    // cout << "hhh" << endl;
-    // this->condition.wait(this->lk);
-    // cout << "hhh" << endl;
     for (int i = 0;i < num_threads;i++)
     {
         this->complete_thread[i] = 0;
@@ -311,42 +319,25 @@ void TaskSystemParallelThreadPoolSpinning::run(IRunnable* runnable, int num_tota
     this->num_tasks_on_threads = num_total_tasks / num_threads;
     // cout << this->num_tasks_on_threads << endl;
     this->num_total_tasks = num_total_tasks;
-    // this->task_id = 0;
     this->num_tasks_on_threads_last = (num_total_tasks % this->num_threads != 0) ? num_total_tasks % this->num_threads + num_tasks_on_threads : num_tasks_on_threads;
     // cout << this->num_tasks_on_threads_last << endl;
     //     this->queue_mutex.unlock();
     // }
-        
-
-
-    // // 每次进入run函数都加入任务队列
-    // for (int i = 0;i < num_total_tasks;i += num_tasks_on_threads)
-    // {
-    //     if (i + num_tasks_on_threads_last >= num_total_tasks)
-    //     {
-    //         function<void(TaskSystemParallelThreadPoolSpinning*, int)> f = task;
-    //         this->tasks_que.push(f);
-    //         break;
-    //     }
-    //     function<void(TaskSystemParallelThreadPoolSpinning*, int)> f = task;
-    //     this->tasks_que.push(f);
-    //     // cout << "任务队列已加入第" << i << "个任务" << endl;
-    // }
 
     this->init = 1;
-    lk.unlock();
-    // cout << "hhhh"<< endl;
-    this->condition.notify_all();
-    // cout << "hhhh" << endl;
-    // 分配任务
+    this->lk.unlock();
 
-    for (int i = 0;i < this->num_threads;i++)
+    this->condition_threads.notify_all();
+
+    // 分配任务
+    if (this->is_first_run)
     {
-        
-        if (this->is_first_run)
+        for (int i = 0;i < this->num_threads;i++)
         {
+
+
             this->workers[i] = thread(task, this, i);
-            
+
             if (i == this->num_threads - 1)
                 this->is_first_run = 0;
             if (num_total_tasks < this->num_threads)
@@ -356,16 +347,17 @@ void TaskSystemParallelThreadPoolSpinning::run(IRunnable* runnable, int num_tota
                 this->tasks_less_threads = 1;
                 break;
             }
-                // cout << "构造第" << i << "个线程" << endl;
+            // cout << "构造第" << i << "个线程" << endl;
         }
-            // this->tasks_que.pop();
-            // cout << "第" << i << "个线程正式启动" << endl;
-        
+        // this->tasks_que.pop();
+        // cout << "第" << i << "个线程正式启动" << endl;
+
     }
 
     // 如何在不把所有线程join（这样线程就无了）的情况下得知此轮run是否把bulk中的所有任务完成？
     for (int i = 0;i < this->num_threads;i++)
     {
+        // 一开始使用忙等循环
         // while (!this->complete_thread[i])
         // {
         //     // bool a = this->complete_thread[i];
@@ -374,11 +366,16 @@ void TaskSystemParallelThreadPoolSpinning::run(IRunnable* runnable, int num_tota
         //     // cout << "线程" << i << "还未完成" << endl;
         // }
         // cout << "线程" << i << "已完成" << this->complete_thread[i] << endl;
-        this->lk = unique_lock<mutex>(this->queue_mutex);
+        
+        auto lk1 = unique_lock<mutex>(this->notify_main);
         // cout << "线程" << i << "已完成" << this->complete_thread[i] << endl;
-        this->condition.wait(this->lk, [this, i] {return this->complete_thread[i];});
+// #pragma GCC push_options 只能对函数体使用，不能在函数中使用。类似的还有__attribute((optimize(“STRING”)))，声明和定义要分开。
+// #pragma GCC optimize ("O0")
+        this->condition_main.wait(lk1, [this, i] {return this->complete_thread[i];});
+// #pragma GCC pop_options
+        
         // cout << "线程" << i << "已完成" << this->complete_thread[i] << endl;
-        lk.unlock();
+        lk1.unlock();
 
         // this->condition.notify_all();
         

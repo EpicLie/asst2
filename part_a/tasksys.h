@@ -84,10 +84,12 @@ private:
     bool* complete_thread = nullptr;
     bool is_first_run = 1;
     bool init = 0;
-    condition_variable condition;
+    condition_variable condition_threads;
     unique_lock<mutex> lk;
     bool last = 0;
     bool tasks_less_threads = 0;
+    mutex notify_main;
+    condition_variable condition_main;
 };
 
 /*
