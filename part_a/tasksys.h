@@ -74,7 +74,7 @@ private:
     int num_threads;
     IRunnable* runnable;
     vector<thread> workers;
-    queue<function<void(TaskSystemParallelThreadPoolSpinning*, int)>> tasks_que;
+    // queue<function<void(TaskSystemParallelThreadPoolSpinning*, int)>> tasks_que;
     mutex queue_mutex;
     // int task_id = 0;
     bool stop_flag = false;
@@ -90,6 +90,7 @@ private:
     bool tasks_less_threads = 0;
     mutex notify_main;
     condition_variable condition_main;
+    
 };
 
 /*
@@ -105,8 +106,30 @@ class TaskSystemParallelThreadPoolSleeping: public ITaskSystem {
         const char* name();
         void run(IRunnable* runnable, int num_total_tasks);
         TaskID runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,
-                                const std::vector<TaskID>& deps);
+            const std::vector<TaskID>& deps);
+        friend void task_sleep(TaskSystemParallelThreadPoolSleeping*, int);
         void sync();
+private:
+    int num_threads;
+    IRunnable* runnable;
+    vector<thread> workers;
+    // queue<function<void(TaskSystemParallelThreadPoolSleeping*, int)>> tasks_que;
+    mutex queue_mutex;
+    // int task_id = 0;
+    bool stop_flag = false;
+    int num_tasks_on_threads = 0;
+    int num_total_tasks = 0;
+    int num_tasks_on_threads_last = 0;
+    bool* complete_thread = nullptr;
+    bool is_first_run = 1;
+    bool init = 0;
+    condition_variable condition_threads;
+    unique_lock<mutex> lk;
+    bool last = 0;
+    bool tasks_less_threads = 0;
+    mutex notify_main;
+    condition_variable condition_main;
+    volatile int threads_cnt = 0;
 };
 
 #endif

@@ -385,7 +385,7 @@ void TaskSystemParallelThreadPoolSpinning::run(IRunnable* runnable, int num_tota
     this->init = 0;
     // cout << "此时任务队列中还有" << this->tasks_que.size() << "个任务" << endl;
 
-};
+}
 
 TaskID TaskSystemParallelThreadPoolSpinning::runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,
     const std::vector<TaskID>& deps) {
@@ -404,6 +404,9 @@ void TaskSystemParallelThreadPoolSpinning::sync() {
  * ================================================================
  */
 
+// 又抠出来一点性能：不是每个线程完成任务时都要唤醒一遍主线程。仅仅只在全部完成时唤醒主线程。
+// 另外，用condition_variable时尽量把条件写上，不然可能会有奇怪的问题。
+
 const char* TaskSystemParallelThreadPoolSleeping::name() {
     return "Parallel + Thread Pool + Sleep";
 }
@@ -415,15 +418,95 @@ TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int n
     // Implementations are free to add new class member variables
     // (requiring changes to tasksys.h).
     //
+    this->num_threads = num_threads;
+    this->complete_thread = new bool[this->num_threads];
+    for (int i = 0;i < num_threads;i++)
+    {
+        thread worker;
+        workers.emplace_back(move(worker));
+        // cout << "构造第" << i << "个线程" << endl;
+        this->complete_thread[i] = 0;// 初始时设定为未完成
+    }
 }
 
-TaskSystemParallelThreadPoolSleeping::~TaskSystemParallelThreadPoolSleeping() {
-    //
-    // TODO: CS149 student implementations may decide to perform cleanup
-    // operations (such as thread pool shutdown construction) here.
-    // Implementations are free to add new class member variables
-    // (requiring changes to tasksys.h).
-    //
+    TaskSystemParallelThreadPoolSleeping::~TaskSystemParallelThreadPoolSleeping() {
+        //
+        // TODO: CS149 student implementations may decide to perform cleanup
+        // operations (such as thread pool shutdown construction) here.
+        // Implementations are free to add new class member variables
+        // (requiring changes to tasksys.h).
+        //
+        // cout << "开始析构" << endl;
+        this->stop_flag = true;
+
+        this->init = 1;
+
+        for (int i = 0;i < num_threads;i++)
+        {
+            this->complete_thread[i] = 0;
+        }
+        this->last = 1;
+
+        this->condition_threads.notify_all();
+
+        for (int i = 0;i < this->num_threads;i++)
+        {
+            this->workers[i].join();
+            if (this->tasks_less_threads)
+                break;
+            // cout << "线程" << i << "已销毁" << endl;
+            // delete this->complete_thread;// 销毁指针 不能，会造成double free
+        }
+    }
+
+void task_sleep(TaskSystemParallelThreadPoolSleeping* cl, int thread_id)
+{
+    
+    while (!cl->stop_flag)
+    {
+        unique_lock<mutex> lk(cl->queue_mutex);
+        cl->condition_threads.wait(lk, [cl, thread_id] {return !(cl->complete_thread[thread_id] || !cl->init);});
+
+        lk.unlock();
+        // cl->condition_main.notify_one();
+
+        // 避免最后一轮被重复执行
+        if (cl->last)
+            break;
+
+        int num_tasks_on_threads = 0;
+        int task_id = thread_id * cl->num_tasks_on_threads;
+        if (task_id + cl->num_tasks_on_threads_last >= cl->num_total_tasks)
+            num_tasks_on_threads = cl->num_tasks_on_threads_last;
+        else
+            num_tasks_on_threads = cl->num_tasks_on_threads;
+
+        // 执行分配的任务
+        for (int i = task_id;i < task_id + num_tasks_on_threads;i++)
+            cl->runnable->runTask(i, cl->num_total_tasks);
+
+        // 尤其注意：为了避免因为就绪队列中线程的随机性导致的读脏数据的问题，临界区资源一定要加锁
+        // 这里，不同线程之间的complete_thread不竞争，但是它们都和主线程竞争。
+        auto lk1 = unique_lock<mutex>(cl->notify_main);
+        cl->complete_thread[thread_id] = 1;
+        cl->threads_cnt++;
+        // cout << "此时已完成的线程数："<<cl->threads_cnt << endl;
+        // cl->notify_main.lock();
+        if (cl->threads_cnt == cl->num_threads)
+        {
+            lk1.unlock();
+            cl->condition_main.notify_one();
+            // cout << "返回了主线程" << endl;
+        }
+        if (lk1.owns_lock())
+            lk1.unlock();
+        // auto lk1 = unique_lock<mutex>(cl->notify_main);
+        
+        // lk1.unlock();
+        // cout << "线程" << thread_id << "执行完成" << endl;
+
+    }
+
 }
 
 void TaskSystemParallelThreadPoolSleeping::run(IRunnable* runnable, int num_total_tasks) {
@@ -434,10 +517,62 @@ void TaskSystemParallelThreadPoolSleeping::run(IRunnable* runnable, int num_tota
     // method in Parts A and B.  The implementation provided below runs all
     // tasks sequentially on the calling thread.
     //
-
-    for (int i = 0; i < num_total_tasks; i++) {
-        runnable->runTask(i, num_total_tasks);
+    // cout << "主线程获得锁" << endl;
+    this->lk = unique_lock<mutex>(this->queue_mutex);
+    for (int i = 0;i < num_threads;i++)
+    {
+        this->complete_thread[i] = 0;
     }
+    this->stop_flag = false;
+    this->runnable = runnable;
+    this->num_tasks_on_threads = num_total_tasks / num_threads;
+    // cout << this->num_tasks_on_threads << endl;
+    this->num_total_tasks = num_total_tasks;
+    this->num_tasks_on_threads_last = (num_total_tasks % this->num_threads != 0) ? num_total_tasks % this->num_threads + num_tasks_on_threads : num_tasks_on_threads;
+    this->init = 1;
+    this->threads_cnt = 0;
+    this->lk.unlock();
+    this->condition_threads.notify_all();
+
+    // 分配任务
+    if (this->is_first_run)
+    {
+        for (int i = 0;i < this->num_threads;i++)
+        {
+            this->workers[i] = thread(task_sleep, this, i);
+
+            if (i == this->num_threads - 1)
+                this->is_first_run = 0;
+            if (num_total_tasks < this->num_threads)
+            {
+                // cout << "break" << endl;
+                this->is_first_run = 0;
+                this->tasks_less_threads = 1;
+                break;
+            }
+            // cout << "构造第" << i << "个线程" << endl;
+        }
+        // this->tasks_que.pop();
+        // cout << "第" << i << "个线程正式启动" << endl;
+
+    }
+
+    // 如何在不把所有线程join（这样线程就无了）的情况下得知此轮run是否把bulk中的所有任务完成？
+    // for (int i = 0;i < this->num_threads;i++)
+
+    auto lk1 = unique_lock<mutex>(this->notify_main);
+
+    this->condition_main.wait(lk1, [this] {return this->threads_cnt == this->num_threads;});
+
+    // cout << "主线程已完成" << endl;
+    lk1.unlock();
+
+    // this->condition.notify_all();
+
+//     if (this->tasks_less_threads)
+//         break;
+// }
+    this->init = 0;
 }
 
 TaskID TaskSystemParallelThreadPoolSleeping::runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,
