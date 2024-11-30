@@ -82,7 +82,7 @@ private:
     int num_total_tasks = 0;
     int num_tasks_on_threads_last = 0;
     bool* complete_thread = nullptr;
-    bool is_first_run = 1;
+    // bool is_first_run = 1;
     bool init = 0;
     condition_variable condition_threads;
     unique_lock<mutex> lk;
@@ -121,7 +121,7 @@ private:
     int num_total_tasks = 0;
     int num_tasks_on_threads_last = 0;
     bool* complete_thread = nullptr;
-    bool is_first_run = 1;
+    // bool is_first_run = 1;
     bool init = 0;
     condition_variable condition_threads;
     unique_lock<mutex> lk;
